@@ -25,6 +25,7 @@ local impl = {
 	desired = false,        -- Enable Firefly Timer
 	desiredRestore = false, -- Restore Jar On Respawn
 	desiredMove = false,    -- Move Cooldown Window
+	desiredLock = false,    -- Lock Jar During Cooldown
 }
 
 local function safeCall(fn, ...)
@@ -51,6 +52,13 @@ pcall(function()
 	my_own_section:AddToggle("Move Cooldown Window", function(bool)
 		impl.desiredMove = bool and true or false
 		if impl.ready then safeCall(impl.setMove, impl.desiredMove) end
+	end)
+end)
+
+pcall(function()
+	my_own_section:AddToggle("Lock Jar During Cooldown", function(bool)
+		impl.desiredLock = bool and true or false
+		if impl.ready then safeCall(impl.setLock, impl.desiredLock) end
 	end)
 end)
 
@@ -92,6 +100,7 @@ local function init()
 
 	local enabled = false
 	local moveMode = false
+	local lockEnabled = false
 	local token = 0
 	local countEnd, cdStart, cdEnd = 0, 0, 0
 	local conns, hooked = {}, {}
@@ -197,13 +206,15 @@ local function init()
 
 	-- ===== Jar use-cooldown lock =====
 	local lockedTools = {}
+	-- Uses ManualActivationOnly (blocks clicks) so Tool.Enabled, which the game's own
+	-- jar script may use for its cooldown, is never touched.
 	local function lockTool(tool)
 		lockedTools[tool] = true
-		pcall(function() tool.Enabled = false end)
+		pcall(function() tool.ManualActivationOnly = true end)
 	end
 	local function unlockAll()
 		for tl in pairs(lockedTools) do
-			pcall(function() tl.Enabled = true end)
+			pcall(function() tl.ManualActivationOnly = false end)
 		end
 		table.clear(lockedTools)
 	end
@@ -223,7 +234,7 @@ local function init()
 
 		-- lock the jar only AFTER the game has handled the click (animation, remote)
 		task.delay(LOCK_DELAY, function()
-			if enabled and isCurrent() and my == token and os.clock() < cdEnd then
+			if lockEnabled and enabled and isCurrent() and my == token and os.clock() < cdEnd then
 				lockTool(tool)
 			end
 		end)
@@ -249,7 +260,7 @@ local function init()
 				local k = cdEnd - t
 				if k > 0 then -- keep the jar locked even if the game re-enables it
 					for tl in pairs(lockedTools) do
-						pcall(function() if tl.Enabled then tl.Enabled = false end end)
+						pcall(function() if not tl.ManualActivationOnly then tl.ManualActivationOnly = true end end)
 					end
 				end
 				if countLabel then
@@ -326,6 +337,12 @@ local function init()
 			pcall(stop)
 			note("Firefly Timer disabled")
 		end
+	end
+
+	impl.setLock = function(bool)
+		if not isCurrent() then return end
+		lockEnabled = bool
+		if not bool then unlockAll() end
 	end
 
 	-- ===== Movable cooldown window =====
@@ -447,4 +464,5 @@ else
 	if impl.desired then safeCall(impl.apply, true) end
 	if impl.desiredRestore then safeCall(impl.setRestore, true) end
 	if impl.desiredMove then safeCall(impl.setMove, true) end
+	if impl.desiredLock then safeCall(impl.setLock, true) end
 end
