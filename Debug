@@ -25,7 +25,6 @@ local impl = {
 	desired = false,        -- Enable Firefly Timer
 	desiredRestore = false, -- Restore Jar On Respawn
 	desiredMove = false,    -- Move Cooldown Window
-	desiredLock = false,    -- Lock Jar During Cooldown
 }
 
 local function safeCall(fn, ...)
@@ -56,13 +55,6 @@ pcall(function()
 end)
 
 pcall(function()
-	my_own_section:AddToggle("Lock Jar During Cooldown", function(bool)
-		impl.desiredLock = bool and true or false
-		if impl.ready then safeCall(impl.setLock, impl.desiredLock) end
-	end)
-end)
-
-pcall(function()
 	-- Saves only on a user flip after load (never from the hub restoring state on join)
 	my_own_section:AddToggle("Save Cooldown Position", function(bool)
 		if bool and impl.ready then safeCall(impl.savePos) end
@@ -85,7 +77,6 @@ local function init()
 	local COOLDOWN = 16
 	local FIRST_JUMP_REMAINING = 0.24 -- fire jump 1 when the displayed countdown reaches this
 	local JUMP_GAP = 0.40             -- jump 2 fires this long after jump 1 (same as the old script)
-	local LOCK_DELAY = 0.5            -- wait this long before locking the jar so the game's animation plays first
 
 	local RESTORE_DELAY = 1.5   -- seconds to let the game hand out its own jar before we restore ours
 	local POS_FILE = "FireflyTimer_CDPos.json"
@@ -100,7 +91,6 @@ local function init()
 
 	local enabled = false
 	local moveMode = false
-	local lockEnabled = false
 	local token = 0
 	local countEnd, cdStart, cdEnd = 0, 0, 0
 	local conns, hooked = {}, {}
@@ -204,21 +194,6 @@ local function init()
 		hum:ChangeState(Enum.HumanoidStateType.Jumping)
 	end
 
-	-- ===== Jar use-cooldown lock =====
-	local lockedTools = {}
-	-- Uses ManualActivationOnly (blocks clicks) so Tool.Enabled, which the game's own
-	-- jar script may use for its cooldown, is never touched.
-	local function lockTool(tool)
-		lockedTools[tool] = true
-		pcall(function() tool.ManualActivationOnly = true end)
-	end
-	local function unlockAll()
-		for tl in pairs(lockedTools) do
-			pcall(function() tl.ManualActivationOnly = false end)
-		end
-		table.clear(lockedTools)
-	end
-
 	-- ===== Timer =====
 	local function onActivated(tool)
 		if not enabled or not isCurrent() then return end
@@ -232,12 +207,6 @@ local function init()
 		local okG, errG = pcall(buildGui)
 		if not okG then note("GUI error: " .. tostring(errG)) end
 
-		-- lock the jar only AFTER the game has handled the click (animation, remote)
-		task.delay(LOCK_DELAY, function()
-			if lockEnabled and enabled and isCurrent() and my == token and os.clock() < cdEnd then
-				lockTool(tool)
-			end
-		end)
 		local timeLeft = COUNTDOWN
 		local j1 = false
 		task.spawn(function()
@@ -258,11 +227,6 @@ local function init()
 
 				local t = os.clock()
 				local k = cdEnd - t
-				if k > 0 then -- keep the jar locked even if the game re-enables it
-					for tl in pairs(lockedTools) do
-						pcall(function() if not tl.ManualActivationOnly then tl.ManualActivationOnly = true end end)
-					end
-				end
 				if countLabel then
 					countLabel.Visible = timeLeft > 0
 					if timeLeft > 0 then countLabel.Text = string.format("%.1f", timeLeft) end
@@ -277,7 +241,7 @@ local function init()
 				end
 				if timeLeft <= 0 and k <= 0 then break end
 			end
-			if my == token then hideGui() unlockAll() end
+			if my == token then hideGui() end
 		end)
 	end
 
@@ -300,7 +264,6 @@ local function init()
 		token = token + 1
 		countEnd, cdEnd = 0, 0
 		hideGui()
-		unlockAll()
 	end
 
 	local function start()
@@ -337,12 +300,6 @@ local function init()
 			pcall(stop)
 			note("Firefly Timer disabled")
 		end
-	end
-
-	impl.setLock = function(bool)
-		if not isCurrent() then return end
-		lockEnabled = bool
-		if not bool then unlockAll() end
 	end
 
 	-- ===== Movable cooldown window =====
@@ -464,5 +421,4 @@ else
 	if impl.desired then safeCall(impl.apply, true) end
 	if impl.desiredRestore then safeCall(impl.setRestore, true) end
 	if impl.desiredMove then safeCall(impl.setMove, true) end
-	if impl.desiredLock then safeCall(impl.setLock, true) end
 end
