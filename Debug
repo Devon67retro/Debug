@@ -245,6 +245,31 @@ local function init()
 		end)
 	end
 
+	-- Detect the REAL fire: the jar's Remote:InvokeServer("Button1Down") call.
+	-- (Activated fires on every tap, even when the game doesn't throw the jar.)
+	local fireWatch = {}      -- [remote] = tool
+	local invokeHooked = false
+	local function installFireHook()
+		if invokeHooked then return true end
+		if not hookfunction then return false end
+		local okH = pcall(function()
+			local probe = Instance.new("RemoteFunction")
+			local old
+			old = hookfunction(probe.InvokeServer, function(self, ...)
+				local watched = fireWatch[self]
+				if watched and enabled and isCurrent() then
+					local a1 = ...
+					if a1 == "Button1Down" then
+						task.defer(onActivated, watched) -- never delay the game's own call
+					end
+				end
+				return old(self, ...)
+			end)
+		end)
+		invokeHooked = okH
+		return okH
+	end
+
 	local function scan()
 		local places = { LocalPlayer:FindFirstChildOfClass("Backpack"), LocalPlayer.Character }
 		for i = 1, 2 do
@@ -253,7 +278,13 @@ local function init()
 				for _, child in ipairs(place:GetChildren()) do
 					if child:IsA("Tool") and child.Name == "Fireflies" and not hooked[child] then
 						hooked[child] = true
-						table.insert(conns, child.Activated:Connect(function() onActivated(child) end))
+						local remote = child:FindFirstChild("Remote")
+						if remote and remote:IsA("RemoteFunction") and installFireHook() then
+							fireWatch[remote] = child
+						else
+							-- fallback if the remote can't be hooked: any tap counts
+							table.insert(conns, child.Activated:Connect(function() onActivated(child) end))
+						end
 					end
 				end
 			end
@@ -287,6 +318,7 @@ local function init()
 		for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
 		table.clear(conns)
 		table.clear(hooked)
+		table.clear(fireWatch)
 	end
 
 	impl.apply = function(bool)
