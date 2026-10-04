@@ -6,7 +6,7 @@ if not shared or type(shared.CreateTab) ~= "function" then
 end
 
 local ok, my_own_tab = pcall(function()
-	return shared.CreateTab("Firefly Timer", "/Devon67retro/Test/refs/heads/main/icon")
+	return shared.CreateTab("Firefly Timer", "/Devon67retro/Debug/refs/heads/main/icon")
 end)
 if not ok or not my_own_tab then return end
 
@@ -75,10 +75,8 @@ local function init()
 
 	local COUNTDOWN = 2.5
 	local COOLDOWN = 16
-	local FIRST_JUMP_REMAINING = 0.24 -- fire when the displayed countdown reaches this value
-	local JUMP_OFFSET = 0       -- optional nudge in seconds: negative = earlier, positive = later
-	local JUMP1_AT = COUNTDOWN - FIRST_JUMP_REMAINING + JUMP_OFFSET -- ~2.26s after activation
-	local JUMP_GAP = 0.50       -- second jump this long after the first jump ACTUALLY fires
+	local FIRST_JUMP_REMAINING = 0.24 -- fire jump 1 when the displayed countdown reaches this
+	local JUMP_GAP = 0.40             -- jump 2 fires this long after jump 1 (same as the old script)
 
 	local RESTORE_DELAY = 1.5   -- seconds to let the game hand out its own jar before we restore ours
 	local POS_FILE = "FireflyTimer_CDPos.json"
@@ -194,9 +192,6 @@ local function init()
 		if not hum or hum.Health <= 0 then return end
 		hum.Jump = true
 		hum:ChangeState(Enum.HumanoidStateType.Jumping)
-		task.delay(0.1, function()
-			pcall(function() if hum.Parent then hum.Jump = false end end)
-		end)
 	end
 
 	-- ===== Jar use-cooldown lock =====
@@ -226,32 +221,34 @@ local function init()
 		if not okG then note("GUI error: " .. tostring(errG)) end
 
 		lockTool(tool)
-		local actStart = now
-		local j1, j2 = false, false
-		local j1Time = 0
+		local timeLeft = COUNTDOWN
+		local j1 = false
 		task.spawn(function()
 			while enabled and isCurrent() and my == token do
-				local t = os.clock()
+				local dt = RunService.Heartbeat:Wait()
+				timeLeft = timeLeft - dt
+				if timeLeft < 0 then timeLeft = 0 end
 
-				if not j1 and t >= actStart + JUMP1_AT then
+				-- jump 1: when the displayed countdown reaches FIRST_JUMP_REMAINING
+				if not j1 and timeLeft <= FIRST_JUMP_REMAINING then
 					j1 = true
-					j1Time = t
 					fireJump()
-				end
-				if j1 and not j2 and t >= j1Time + JUMP_GAP then
-					j2 = true
-					fireJump()
+					-- jump 2: JUMP_GAP after jump 1 actually fired
+					task.delay(JUMP_GAP, function()
+						if enabled and isCurrent() and my == token then fireJump() end
+					end)
 				end
 
-				local c, k = countEnd - t, cdEnd - t
-				if k > 0 then
+				local t = os.clock()
+				local k = cdEnd - t
+				if k > 0 then -- keep the jar locked even if the game re-enables it
 					for tl in pairs(lockedTools) do
 						pcall(function() if tl.Enabled then tl.Enabled = false end end)
 					end
 				end
 				if countLabel then
-					countLabel.Visible = c > 0
-					if c > 0 then countLabel.Text = string.format("%.1f", c) end
+					countLabel.Visible = timeLeft > 0
+					if timeLeft > 0 then countLabel.Text = string.format("%.1f", timeLeft) end
 				end
 				if cdLabel then
 					cdLabel.Visible = k > 0 or moveMode
@@ -261,8 +258,7 @@ local function init()
 						cdLabel.Text = "CD 0.0"
 					end
 				end
-				if c <= 0 and k <= 0 then break end
-				stepEvent:Wait()
+				if timeLeft <= 0 and k <= 0 then break end
 			end
 			if my == token then hideGui() unlockAll() end
 		end)
