@@ -77,6 +77,7 @@ local function init()
 	local COOLDOWN = 16
 	local FIRST_JUMP_REMAINING = 0.24 -- fire jump 1 when the displayed countdown reaches this
 	local JUMP_GAP = 0.40             -- jump 2 fires this long after jump 1 (same as the old script)
+	local LOCK_DELAY = 0.5            -- wait this long before locking the jar so the game's animation plays first
 
 	local RESTORE_DELAY = 1.5   -- seconds to let the game hand out its own jar before we restore ours
 	local POS_FILE = "FireflyTimer_CDPos.json"
@@ -220,7 +221,12 @@ local function init()
 		local okG, errG = pcall(buildGui)
 		if not okG then note("GUI error: " .. tostring(errG)) end
 
-		lockTool(tool)
+		-- lock the jar only AFTER the game has handled the click (animation, remote)
+		task.delay(LOCK_DELAY, function()
+			if enabled and isCurrent() and my == token and os.clock() < cdEnd then
+				lockTool(tool)
+			end
+		end)
 		local timeLeft = COUNTDOWN
 		local j1 = false
 		task.spawn(function()
