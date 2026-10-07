@@ -98,12 +98,6 @@ local function init()
 	local scanToken = 0
 	local gui, countLabel, cdLabel
 
-	-- animation guard: stops replays of the jar's animation during the 16s
-	local jarAnimId = nil
-	local armedUntil = 0
-	local fireTime = 0
-	local animatorConn = nil
-
 	-- ===== Saved cooldown-window position =====
 	local savedPos = nil -- UDim2 (scale), loaded from file
 
@@ -210,8 +204,6 @@ local function init()
 		if not enabled or not isCurrent() then return end
 		local now = os.clock()
 		if now < cdEnd then return end
-		armedUntil = now + 0.6
-		fireTime = now
 
 		token = token + 1
 		local my = token
@@ -318,42 +310,12 @@ local function init()
 		end
 	end
 
-	local function watchAnimator()
-		if animatorConn then animatorConn:Disconnect() animatorConn = nil end
-		local char = LocalPlayer.Character
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		local animator = hum and hum:FindFirstChildOfClass("Animator")
-		if not animator then return end
-		animatorConn = animator.AnimationPlayed:Connect(function(track)
-			if not isCurrent() or not enabled then return end
-			local id = track.Animation and track.Animation.AnimationId
-			if not id or id == "" then return end
-			local now = os.clock()
-			if not jarAnimId then
-				-- learn the jar animation: first Action-priority track right after the tap
-				local p = track.Priority.Value
-				if now <= armedUntil and p >= 2 and p <= 5 then
-					jarAnimId = id
-				end
-			elseif id == jarAnimId and now < cdEnd and now > fireTime + 0.6 then
-				-- a replay during the 16s: stop it (the real throw is left alone)
-				pcall(function() track:Stop(0) end)
-			end
-		end)
-	end
-
 	local function start()
 		buildGui()
-		watchAnimator()
 		scanToken = scanToken + 1
 		local my = scanToken
-		table.insert(conns, LocalPlayer.CharacterAdded:Connect(function(char)
+		table.insert(conns, LocalPlayer.CharacterAdded:Connect(function()
 			if enabled and isCurrent() then resetCooldown() end
-			task.spawn(function()
-				local h = char:WaitForChild("Humanoid", 5)
-				if h then h:WaitForChild("Animator", 5) end
-				if enabled and isCurrent() then watchAnimator() end
-			end)
 		end))
 		task.spawn(function()
 			while enabled and isCurrent() and my == scanToken do
@@ -379,7 +341,6 @@ local function init()
 		for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
 		table.clear(conns)
 		table.clear(hooked)
-		if animatorConn then animatorConn:Disconnect() animatorConn = nil end
 	end
 
 	impl.apply = function(bool)
