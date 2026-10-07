@@ -69,7 +69,6 @@ local function init()
 	local RunService = game:GetService("RunService")
 	local UserInputService = game:GetService("UserInputService")
 	local HttpService = game:GetService("HttpService")
-	local ReplicatedStorage = game:GetService("ReplicatedStorage")
 	local LocalPlayer = Players.LocalPlayer
 	local pg = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -264,50 +263,12 @@ local function init()
 		end
 	end
 
-	-- Respawn / round end: cancel everything and show "Active" (jar usable again)
+	-- Respawn: cancel everything and show "Active" (jar usable again)
 	local function resetCooldown()
 		token = token + 1
 		cdEnd = 0
 		hasCd = true
 		hideGui()
-	end
-
-	-- ===== Round-end reset =====
-	local roundHooked = false
-	local function hookRoundRewards()
-		if roundHooked then return end
-		local remote
-		pcall(function() remote = ReplicatedStorage.Remotes.Gameplay.GetLastRoundRewards end)
-		if not remote then return end
-
-		if hookfunction then
-			local okH = pcall(function()
-				local old
-				old = hookfunction(remote.InvokeServer, function(self, ...)
-					if self == remote and enabled and isCurrent() then
-						pcall(resetCooldown)
-					end
-					return old(self, ...)
-				end)
-			end)
-			if okH then roundHooked = true return end
-		end
-
-		if getrawmetatable and getnamecallmethod and setreadonly and newcclosure then
-			local okH = pcall(function()
-				local mt = getrawmetatable(game)
-				local oldNamecall = mt.__namecall
-				setreadonly(mt, false)
-				mt.__namecall = newcclosure(function(self, ...)
-					if self == remote and getnamecallmethod() == "InvokeServer" and enabled and isCurrent() then
-						pcall(resetCooldown)
-					end
-					return oldNamecall(self, ...)
-				end)
-				setreadonly(mt, true)
-			end)
-			if okH then roundHooked = true end
-		end
 	end
 
 	local function start()
@@ -320,13 +281,6 @@ local function init()
 		task.spawn(function()
 			while enabled and isCurrent() and my == scanToken do
 				pcall(scan)
-				task.wait(0.5)
-			end
-		end)
-		task.spawn(function()
-			for _ = 1, 20 do
-				if roundHooked or not enabled or scanToken ~= my then break end
-				pcall(hookRoundRewards)
 				task.wait(0.5)
 			end
 		end)
