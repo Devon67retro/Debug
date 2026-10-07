@@ -69,14 +69,14 @@ local function init()
 	local RunService = game:GetService("RunService")
 	local UserInputService = game:GetService("UserInputService")
 	local HttpService = game:GetService("HttpService")
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
 	local LocalPlayer = Players.LocalPlayer
-	local stepEvent = RunService.PreSimulation or RunService.Stepped
 	local pg = LocalPlayer:WaitForChild("PlayerGui")
 
-	local COUNTDOWN = 2.5
-	local COOLDOWN = 16
+	local COUNTDOWN = 2.5             -- copy of the game's own jar cooldown
+	local COOLDOWN = 16               -- cooldown tracker length
 	local FIRST_JUMP_REMAINING = 0.24 -- fire jump 1 when the displayed countdown reaches this
-	local JUMP_GAP = 0.40             -- jump 2 fires this long after jump 1 (same as the old script)
+	local JUMP_GAP = 0.40             -- jump 2 fires this long after jump 1 fired
 
 	local RESTORE_DELAY = 1.5   -- seconds to let the game hand out its own jar before we restore ours
 	local POS_FILE = "FireflyTimer_CDPos.json"
@@ -91,8 +91,9 @@ local function init()
 
 	local enabled = false
 	local moveMode = false
+	local hasCd = false        -- true after the first fire (or a reset): box stays visible showing "Active"
 	local token = 0
-	local countEnd, cdStart, cdEnd = 0, 0, 0
+	local cdStart, cdEnd = 0, 0
 	local conns, hooked = {}, {}
 	local scanToken = 0
 	local gui, countLabel, cdLabel
@@ -172,16 +173,20 @@ local function init()
 		setupDrag(cdLabel)
 	end
 
-	local function showCdPreview()
-		if not cdLabel then return end
-		cdLabel.Visible = true
-		cdLabel.Text = "CD 0.0"
-	end
-
+	-- Cooldown box: hidden before the first fire, then always visible
+	-- (counting during the 16s, "Active" the rest of the time).
 	local function hideGui()
 		if countLabel then countLabel.Visible = false end
 		if cdLabel then
-			if moveMode then showCdPreview() else cdLabel.Visible = false end
+			if moveMode then
+				cdLabel.Visible = true
+				cdLabel.Text = hasCd and "Active" or "CD 0.0"
+			elseif hasCd then
+				cdLabel.Visible = true
+				cdLabel.Text = "Active"
+			else
+				cdLabel.Visible = false
+			end
 		end
 	end
 
@@ -194,33 +199,20 @@ local function init()
 		hum:ChangeState(Enum.HumanoidStateType.Jumping)
 	end
 
-	-- ===== Jar use-cooldown lock =====
-	local lockedTools = {}
-	local function lockTool(tool)
-		lockedTools[tool] = true
-		pcall(function() tool.Enabled = false end)
-	end
-	local function unlockAll()
-		for tl in pairs(lockedTools) do
-			pcall(function() tl.Enabled = true end)
-		end
-		table.clear(lockedTools)
-	end
-
-	-- ===== Timer =====
-	local function onActivated(tool)
+	-- ===== Timer (the jar tool itself is never touched) =====
+	local function onActivated()
 		if not enabled or not isCurrent() then return end
 		local now = os.clock()
 		if now < cdEnd then return end
 
 		token = token + 1
 		local my = token
-		countEnd, cdStart, cdEnd = now + COUNTDOWN, now, now + COOLDOWN
+		cdStart, cdEnd = now, now + COOLDOWN
+		hasCd = true
 
 		local okG, errG = pcall(buildGui)
 		if not okG then note("GUI error: " .. tostring(errG)) end
 
-		lockTool(tool)
 		local timeLeft = COUNTDOWN
 		local j1 = false
 		task.spawn(function()
@@ -241,26 +233,19 @@ local function init()
 
 				local t = os.clock()
 				local k = cdEnd - t
-				if k > 0 then -- keep the jar locked even if the game re-enables it
-					for tl in pairs(lockedTools) do
-						pcall(function() if tl.Enabled then tl.Enabled = false end end)
-					end
-				end
 				if countLabel then
 					countLabel.Visible = timeLeft > 0
 					if timeLeft > 0 then countLabel.Text = string.format("%.1f", timeLeft) end
 				end
 				if cdLabel then
-					cdLabel.Visible = k > 0 or moveMode
 					if k > 0 then
+						cdLabel.Visible = true
 						cdLabel.Text = string.format("CD %.1f", t - cdStart)
-					elseif moveMode then
-						cdLabel.Text = "CD 0.0"
 					end
 				end
 				if timeLeft <= 0 and k <= 0 then break end
 			end
-			if my == token then hideGui() unlockAll() end
+			if my == token then hideGui() end -- shows "Active" once the 16s is over
 		end)
 	end
 
@@ -272,18 +257,57 @@ local function init()
 				for _, child in ipairs(place:GetChildren()) do
 					if child:IsA("Tool") and child.Name == "Fireflies" and not hooked[child] then
 						hooked[child] = true
-						table.insert(conns, child.Activated:Connect(function() onActivated(child) end))
+						table.insert(conns, child.Activated:Connect(function() onActivated() end))
 					end
 				end
 			end
 		end
 	end
 
-	local function reset()
+	-- Respawn / round end: cancel everything and show "Active" (jar usable again)
+	local function resetCooldown()
 		token = token + 1
-		countEnd, cdEnd = 0, 0
+		cdEnd = 0
+		hasCd = true
 		hideGui()
-		unlockAll()
+	end
+
+	-- ===== Round-end reset =====
+	local roundHooked = false
+	local function hookRoundRewards()
+		if roundHooked then return end
+		local remote
+		pcall(function() remote = ReplicatedStorage.Remotes.Gameplay.GetLastRoundRewards end)
+		if not remote then return end
+
+		if hookfunction then
+			local okH = pcall(function()
+				local old
+				old = hookfunction(remote.InvokeServer, function(self, ...)
+					if self == remote and enabled and isCurrent() then
+						pcall(resetCooldown)
+					end
+					return old(self, ...)
+				end)
+			end)
+			if okH then roundHooked = true return end
+		end
+
+		if getrawmetatable and getnamecallmethod and setreadonly and newcclosure then
+			local okH = pcall(function()
+				local mt = getrawmetatable(game)
+				local oldNamecall = mt.__namecall
+				setreadonly(mt, false)
+				mt.__namecall = newcclosure(function(self, ...)
+					if self == remote and getnamecallmethod() == "InvokeServer" and enabled and isCurrent() then
+						pcall(resetCooldown)
+					end
+					return oldNamecall(self, ...)
+				end)
+				setreadonly(mt, true)
+			end)
+			if okH then roundHooked = true end
+		end
 	end
 
 	local function start()
@@ -291,7 +315,7 @@ local function init()
 		scanToken = scanToken + 1
 		local my = scanToken
 		table.insert(conns, LocalPlayer.CharacterAdded:Connect(function()
-			if enabled and isCurrent() then reset() end
+			if enabled and isCurrent() then resetCooldown() end
 		end))
 		task.spawn(function()
 			while enabled and isCurrent() and my == scanToken do
@@ -299,11 +323,21 @@ local function init()
 				task.wait(0.5)
 			end
 		end)
+		task.spawn(function()
+			for _ = 1, 20 do
+				if roundHooked or not enabled or scanToken ~= my then break end
+				pcall(hookRoundRewards)
+				task.wait(0.5)
+			end
+		end)
 	end
 
 	local function stop()
 		scanToken = scanToken + 1
-		reset()
+		token = token + 1
+		cdEnd = 0
+		hasCd = false
+		hideGui()
 		for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
 		table.clear(conns)
 		table.clear(hooked)
@@ -328,11 +362,7 @@ local function init()
 		moveMode = bool
 		buildGui()
 		cdLabel.Active = bool
-		if bool then
-			showCdPreview()
-		elseif os.clock() >= cdEnd then
-			cdLabel.Visible = false
-		end
+		if os.clock() >= cdEnd then hideGui() end
 	end
 
 	impl.savePos = function()
@@ -341,7 +371,6 @@ local function init()
 		local size = gui.AbsoluteSize
 		if size.X <= 0 or size.Y <= 0 then return end
 		-- Position is already relative to the ScreenGui's own area, so convert it directly
-		-- (AbsolutePosition includes inset/safe-area offsets and caused the shift).
 		local lp = cdLabel.Position
 		local x = math.clamp(lp.X.Scale + lp.X.Offset / size.X, 0, 0.95)
 		local y = math.clamp(lp.Y.Scale + lp.Y.Offset / size.Y, 0, 0.95)
@@ -387,7 +416,6 @@ local function init()
 		if not bp then return end
 		local okC, c = pcall(function() return jarCache:Clone() end)
 		if okC and c then
-			pcall(function() c.Enabled = true end)
 			pcall(function() c:SetAttribute("FireflyRestored", true) end)
 			c.Parent = bp
 		end
@@ -420,7 +448,6 @@ local function init()
 					if real ~= cachedFrom then
 						local okC, c = pcall(function() return real:Clone() end)
 						if okC and c then
-							pcall(function() c.Enabled = true end)
 							jarCache, cachedFrom = c, real
 						end
 					end
