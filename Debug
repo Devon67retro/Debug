@@ -319,84 +319,18 @@ local function init()
 		if os.clock() >= cdEnd then hideGui() end
 	end
 
-	-- ===== Auto get Fireflies to the hotbar (same method as the Bomb Jump+ script) =====
-	-- Exactly like the bomb script: the remote is fired ONCE when the toggle is turned on,
-	-- and ONCE after each respawn. No loop, so nothing keeps re-giving you the jar.
+	-- ===== Auto get Fireflies (exact same method as the Bomb Jump+ auto grab) =====
+	-- Remote is invoked ONCE when the toggle is turned on, and ONCE after each respawn
+	-- (1s + 0.2s after the character spawns). Nothing else touches the jar:
+	-- no collision edits, no settle-waiting, no unequipping.
 	local ITEM_NAME = "Fireflies"
-	local GET_DELAY = 2 -- seconds to wait before the jar is given (change this number to adjust)
 	local autoEquip = false
 	local autoConn = nil
 
-	local function findItem()
-		local char = LocalPlayer.Character
-		local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
-		local held = char and char:FindFirstChild(ITEM_NAME)
-		local stored = bp and bp:FindFirstChild(ITEM_NAME)
-		return held, stored
-	end
-
-	-- Stops the jar from bumping/pushing your character: its parts are made
-	-- non-colliding and massless the instant they appear (hotbar or held).
-	local softConns = {}
-
-	local function softenPart(inst)
-		if inst:IsA("BasePart") then
-			local tool = inst:FindFirstAncestorOfClass("Tool")
-			if tool and tool.Name == ITEM_NAME then
-				inst.CanCollide = false
-				inst.Massless = true
-			end
-		end
-	end
-
-	local function clearSoftConns()
-		for _, c in ipairs(softConns) do pcall(function() c:Disconnect() end) end
-		table.clear(softConns)
-	end
-
-	local function watchCharacter(char)
-		if not char then return end
-		for _, d in ipairs(char:GetDescendants()) do softenPart(d) end
-		table.insert(softConns, char.DescendantAdded:Connect(softenPart))
-	end
-
-	-- Waits until the character has fully spawned and is standing on the ground.
-	-- Getting the jar while you are still dropping in / landing is what flings you.
-	local function waitSettled(char)
-		if not char then return false end
-		local hum = char:WaitForChild("Humanoid", 5)
-		local root = char:WaitForChild("HumanoidRootPart", 5)
-		if not hum or not root then return false end
-		local t0 = os.clock()
-		while os.clock() - t0 < 6 do
-			if not char.Parent or hum.Health <= 0 then return false end
-			if hum.FloorMaterial ~= Enum.Material.Air and math.abs(root.AssemblyLinearVelocity.Y) < 2 then
-				break
-			end
-			task.wait(0.1)
-		end
-		task.wait(GET_DELAY) -- delay before the jar is given
-		return char.Parent ~= nil and hum.Health > 0
-	end
-
-	local function requestFireflies(char)
-		if not waitSettled(char) then return end
-		if not autoEquip or not isCurrent() then return end
-		-- skip if you already have it
-		local held, stored = findItem()
-		if held or stored then return end
-
-		local hum = char:FindFirstChildOfClass("Humanoid")
-
+	local function giveFireflies()
 		pcall(function()
 			ReplicatedStorage.Remotes.Extras.ReplicateToy:InvokeServer(ITEM_NAME)
 		end)
-
-		-- if the jar ended up in your hand, put it back in the hotbar
-		task.wait(0.2)
-		if hum and char.Parent and char:FindFirstChild(ITEM_NAME) then
-			pcall(function() hum:UnequipTools() end)
-		end
 	end
 
 	impl.setAuto = function(bool)
@@ -406,21 +340,16 @@ local function init()
 			pcall(function() autoConn:Disconnect() end)
 			autoConn = nil
 		end
-		clearSoftConns()
 		if not bool then return end
 
-		-- soften the jar's parts the moment they appear (hotbar or held)
-		for _, d in ipairs(LocalPlayer:GetDescendants()) do softenPart(d) end
-		table.insert(softConns, LocalPlayer.DescendantAdded:Connect(softenPart))
-		watchCharacter(LocalPlayer.Character)
+		-- once, right when the toggle is turned on
+		giveFireflies()
 
-		-- once, right when the toggle is turned on (waits until you are settled)
-		task.spawn(requestFireflies, LocalPlayer.Character)
-
-		-- once after every respawn (waits until the new character has landed and settled)
-		autoConn = LocalPlayer.CharacterAdded:Connect(function(newChar)
-			watchCharacter(newChar)
-			requestFireflies(newChar)
+		-- once after every respawn (same 1s + 0.2s timing as the bomb script)
+		autoConn = LocalPlayer.CharacterAdded:Connect(function()
+			task.wait(1)
+			task.wait(0.2)
+			if autoEquip and isCurrent() then giveFireflies() end
 		end)
 	end
 
