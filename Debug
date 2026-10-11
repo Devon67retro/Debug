@@ -319,13 +319,15 @@ local function init()
 		if os.clock() >= cdEnd then hideGui() end
 	end
 
-	-- ===== Auto get + equip Fireflies (same method as the Bomb Jump+ script) =====
-	-- 1) already held? done  2) in Backpack? equip it
-	-- 3) otherwise ask the server for it through the ReplicateToy remote, wait for it to show up, equip it
+	-- ===== Auto get Fireflies to the hotbar (same method as the Bomb Jump+ script) =====
+	-- If the jar is missing (not in hotbar, not held), ask the server for it through the
+	-- ReplicateToy remote. It only gets added to the hotbar; it is never force-equipped.
 	local ITEM_NAME = "Fireflies"
 	local autoEquip = false
 	local autoToken = 0
 	local lastRequest = 0
+	local lastSpawn = 0
+	local autoConn = nil
 
 	local function findItem()
 		local char = LocalPlayer.Character
@@ -335,31 +337,24 @@ local function init()
 		return held, stored
 	end
 
-	local function getAndEquipFireflies()
+	local function getFireflies()
 		local char = LocalPlayer.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		if not hum or hum.Health <= 0 then return end
 
+		-- let a respawn settle first, like the bomb script does
+		if os.clock() - lastSpawn < 1.2 then return end
+
+		-- already have it (in the hotbar or held): do nothing, never equip it
 		local held, stored = findItem()
-		if held then return end
+		if held or stored then return end
 
-		if not stored then
-			-- throttle so the remote isn't spammed
-			if os.clock() - lastRequest < 3 then return end
-			lastRequest = os.clock()
-			pcall(function()
-				ReplicatedStorage.Remotes.Extras.ReplicateToy:InvokeServer(ITEM_NAME)
-			end)
-			for _ = 1, 5 do
-				held, stored = findItem()
-				if held or stored then break end
-				task.wait(0.05)
-			end
-		end
-
-		if stored and stored.Parent then
-			hum:EquipTool(stored)
-		end
+		-- throttle so the remote isn't spammed
+		if os.clock() - lastRequest < 3 then return end
+		lastRequest = os.clock()
+		pcall(function()
+			ReplicatedStorage.Remotes.Extras.ReplicateToy:InvokeServer(ITEM_NAME)
+		end)
 	end
 
 	impl.setAuto = function(bool)
@@ -367,10 +362,17 @@ local function init()
 		autoEquip = bool
 		autoToken = autoToken + 1
 		local my = autoToken
+		if autoConn then
+			pcall(function() autoConn:Disconnect() end)
+			autoConn = nil
+		end
 		if not bool then return end
+		autoConn = LocalPlayer.CharacterAdded:Connect(function()
+			lastSpawn = os.clock()
+		end)
 		task.spawn(function()
 			while autoEquip and isCurrent() and my == autoToken do
-				pcall(getAndEquipFireflies)
+				pcall(getFireflies)
 				task.wait(0.25)
 			end
 		end)
