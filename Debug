@@ -320,13 +320,10 @@ local function init()
 	end
 
 	-- ===== Auto get Fireflies to the hotbar (same method as the Bomb Jump+ script) =====
-	-- If the jar is missing (not in hotbar, not held), ask the server for it through the
-	-- ReplicateToy remote. It only gets added to the hotbar; it is never force-equipped.
+	-- Exactly like the bomb script: the remote is fired ONCE when the toggle is turned on,
+	-- and ONCE after each respawn. No loop, so nothing keeps re-giving you the jar.
 	local ITEM_NAME = "Fireflies"
 	local autoEquip = false
-	local autoToken = 0
-	local lastRequest = 0
-	local lastSpawn = 0
 	local autoConn = nil
 
 	local function findItem()
@@ -337,21 +334,10 @@ local function init()
 		return held, stored
 	end
 
-	local function getFireflies()
-		local char = LocalPlayer.Character
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		if not hum or hum.Health <= 0 then return end
-
-		-- let a respawn settle first, like the bomb script does
-		if os.clock() - lastSpawn < 1.2 then return end
-
-		-- already have it (in the hotbar or held): do nothing, never equip it
+	local function requestFireflies()
+		-- skip if you already have it
 		local held, stored = findItem()
 		if held or stored then return end
-
-		-- throttle so the remote isn't spammed
-		if os.clock() - lastRequest < 3 then return end
-		lastRequest = os.clock()
 		pcall(function()
 			ReplicatedStorage.Remotes.Extras.ReplicateToy:InvokeServer(ITEM_NAME)
 		end)
@@ -360,21 +346,19 @@ local function init()
 	impl.setAuto = function(bool)
 		if not isCurrent() then return end
 		autoEquip = bool
-		autoToken = autoToken + 1
-		local my = autoToken
 		if autoConn then
 			pcall(function() autoConn:Disconnect() end)
 			autoConn = nil
 		end
 		if not bool then return end
+
+		-- once, right when the toggle is turned on
+		task.spawn(requestFireflies)
+
+		-- once after every respawn (waits 1.2s, same as the bomb script)
 		autoConn = LocalPlayer.CharacterAdded:Connect(function()
-			lastSpawn = os.clock()
-		end)
-		task.spawn(function()
-			while autoEquip and isCurrent() and my == autoToken do
-				pcall(getFireflies)
-				task.wait(0.25)
-			end
+			task.wait(1.2)
+			if autoEquip and isCurrent() then requestFireflies() end
 		end)
 	end
 
