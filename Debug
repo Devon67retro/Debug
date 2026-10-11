@@ -334,7 +334,28 @@ local function init()
 		return held, stored
 	end
 
-	local function requestFireflies()
+	-- Waits until the character has fully spawned and is standing on the ground.
+	-- Getting the jar while you are still dropping in / landing is what flings you.
+	local function waitSettled(char)
+		if not char then return false end
+		local hum = char:WaitForChild("Humanoid", 5)
+		local root = char:WaitForChild("HumanoidRootPart", 5)
+		if not hum or not root then return false end
+		local t0 = os.clock()
+		while os.clock() - t0 < 6 do
+			if not char.Parent or hum.Health <= 0 then return false end
+			if hum.FloorMaterial ~= Enum.Material.Air and math.abs(root.AssemblyLinearVelocity.Y) < 2 then
+				break
+			end
+			task.wait(0.1)
+		end
+		task.wait(0.6) -- extra moment so the spawn physics fully calm down
+		return char.Parent ~= nil and hum.Health > 0
+	end
+
+	local function requestFireflies(char)
+		if not waitSettled(char) then return end
+		if not autoEquip or not isCurrent() then return end
 		-- skip if you already have it
 		local held, stored = findItem()
 		if held or stored then return end
@@ -352,13 +373,12 @@ local function init()
 		end
 		if not bool then return end
 
-		-- once, right when the toggle is turned on
-		task.spawn(requestFireflies)
+		-- once, right when the toggle is turned on (waits until you are settled)
+		task.spawn(requestFireflies, LocalPlayer.Character)
 
-		-- once after every respawn (waits 1.2s, same as the bomb script)
-		autoConn = LocalPlayer.CharacterAdded:Connect(function()
-			task.wait(1.2)
-			if autoEquip and isCurrent() then requestFireflies() end
+		-- once after every respawn (waits until the new character has landed and settled)
+		autoConn = LocalPlayer.CharacterAdded:Connect(function(newChar)
+			requestFireflies(newChar)
 		end)
 	end
 
