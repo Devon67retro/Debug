@@ -25,6 +25,8 @@ local impl = {
 	desired = false,        -- Enable Firefly Timer
 	desiredMove = false,    -- Move Cooldown Window
 	desiredAuto = false,    -- Auto Get Fireflies
+	desiredAnti = false,    -- Anti-Fling On Equip
+	desiredDebug = false,   -- Fling Debug Report
 }
 
 local function safeCall(fn, ...)
@@ -51,6 +53,20 @@ pcall(function()
 	my_own_section:AddToggle("Auto Get Fireflies", function(bool)
 		impl.desiredAuto = bool and true or false
 		if impl.ready then safeCall(impl.setAuto, impl.desiredAuto) end
+	end)
+end)
+
+pcall(function()
+	my_own_section:AddToggle("Anti-Fling On Equip", function(bool)
+		impl.desiredAnti = bool and true or false
+		if impl.ready then safeCall(impl.setAnti, impl.desiredAnti) end
+	end)
+end)
+
+pcall(function()
+	my_own_section:AddToggle("Fling Debug Report", function(bool)
+		impl.desiredDebug = bool and true or false
+		if impl.ready then safeCall(impl.setDebug, impl.desiredDebug) end
 	end)
 end)
 
@@ -319,15 +335,21 @@ local function init()
 		if os.clock() >= cdEnd then hideGui() end
 	end
 
-	-- ===== Auto get Fireflies (exact same method as the Bomb Jump+ auto grab) =====
+	-- ===== Auto get Fireflies (same method as the Bomb Jump+ auto grab) =====
 	-- Remote is invoked ONCE when the toggle is turned on, and ONCE after each respawn
-	-- (1s + 0.2s after the character spawns). Nothing else touches the jar:
-	-- no collision edits, no settle-waiting, no unequipping.
+	-- (1s + 0.2s after the character spawns). It is skipped if you already hold a jar.
 	local ITEM_NAME = "Fireflies"
 	local autoEquip = false
 	local autoConn = nil
 
+	local function hasJar()
+		local char = LocalPlayer.Character
+		local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+		return (char and char:FindFirstChild(ITEM_NAME)) or (bp and bp:FindFirstChild(ITEM_NAME))
+	end
+
 	local function giveFireflies()
+		if hasJar() then return end
 		pcall(function()
 			ReplicatedStorage.Remotes.Extras.ReplicateToy:InvokeServer(ITEM_NAME)
 		end)
@@ -351,6 +373,133 @@ local function init()
 			task.wait(0.2)
 			if autoEquip and isCurrent() then giveFireflies() end
 		end)
+	end
+
+	-- ===== Equip guard: anti-fling + debug report =====
+	-- Works on any jar you equip (auto-grabbed or not). Only runs while one of the two
+	-- toggles is on. Using the jar (Activated) ends the guard window so the jar's own
+	-- launch is never suppressed.
+	local GUARD_TIME = 1.0 -- seconds of protection after the jar is equipped
+	local MAX_SPEED = 40   -- horizontal speed treated as a fling during the window
+	local antiFling, debugMode = false, false
+	local guardUntil = 0
+	local report = nil
+	local watchConns = {}
+	local seenTools = setmetatable({}, { __mode = "k" })
+
+	local function softenPart(p)
+		p.CanCollide = false
+		p.Massless = true
+	end
+
+	local function softenIfJar(inst)
+		if inst:IsA("BasePart") then
+			local tool = inst:FindFirstAncestorOfClass("Tool")
+			if tool and tool.Name == ITEM_NAME then softenPart(inst) end
+		end
+	end
+
+	local function softenTool(tool)
+		for _, d in ipairs(tool:GetDescendants()) do
+			if d:IsA("BasePart") then softenPart(d) end
+		end
+	end
+
+	local function onJarEquipped(tool)
+		if debugMode then
+			-- snapshot BEFORE softening so the numbers show what the jar really does
+			local parts, colliding, extras = 0, 0, {}
+			for _, d in ipairs(tool:GetDescendants()) do
+				if d:IsA("BasePart") then
+					parts = parts + 1
+					if d.CanCollide then colliding = colliding + 1 end
+				elseif d:IsA("BodyMover") or d:IsA("Script") or d:IsA("LocalScript")
+					or d:IsA("VectorForce") or d:IsA("LinearVelocity") or d:IsA("AlignPosition") then
+					table.insert(extras, d.ClassName .. ":" .. d.Name)
+				end
+			end
+			report = { parts = parts, colliding = colliding, extras = extras, peak = 0, at = os.clock() + GUARD_TIME }
+		end
+		if antiFling then softenTool(tool) end
+		guardUntil = os.clock() + GUARD_TIME
+		if not seenTools[tool] then
+			seenTools[tool] = true
+			tool.Activated:Connect(function() guardUntil = 0 end)
+		end
+	end
+
+	local function onStepGuard()
+		local now = os.clock()
+		local char = LocalPlayer.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+
+		if report then
+			if root then
+				local sp = root.AssemblyLinearVelocity.Magnitude
+				if sp > report.peak then report.peak = sp end
+			end
+			if now >= report.at then
+				note(string.format("Jar: %d parts, %d colliding, peak speed %.0f, extras: %s",
+					report.parts, report.colliding, report.peak,
+					#report.extras > 0 and table.concat(report.extras, ", ") or "none"))
+				report = nil
+			end
+		end
+
+		if not antiFling or now >= guardUntil or not root then return end
+
+		local tool = char:FindFirstChild(ITEM_NAME)
+		if tool and tool:IsA("Tool") then softenTool(tool) end
+
+		if root.AssemblyAngularVelocity.Magnitude > 25 then
+			root.AssemblyAngularVelocity = Vector3.zero
+		end
+		local v = root.AssemblyLinearVelocity
+		local horizontal = Vector3.new(v.X, 0, v.Z).Magnitude
+		if horizontal > MAX_SPEED or v.Y > 80 then
+			root.AssemblyLinearVelocity = Vector3.new(0, math.min(v.Y, 0), 0)
+		end
+	end
+
+	local function clearWatch()
+		for _, c in ipairs(watchConns) do pcall(function() c:Disconnect() end) end
+		table.clear(watchConns)
+	end
+
+	local function watchChar(char)
+		if not char then return end
+		table.insert(watchConns, char.ChildAdded:Connect(function(c)
+			if c:IsA("Tool") and c.Name == ITEM_NAME then onJarEquipped(c) end
+		end))
+		local held = char:FindFirstChild(ITEM_NAME)
+		if held and held:IsA("Tool") then onJarEquipped(held) end
+	end
+
+	local function refreshWatch()
+		clearWatch()
+		report = nil
+		guardUntil = 0
+		if not (antiFling or debugMode) then return end
+		if antiFling then
+			-- soften jar parts the moment they appear (hotbar or held)
+			for _, d in ipairs(LocalPlayer:GetDescendants()) do softenIfJar(d) end
+			table.insert(watchConns, LocalPlayer.DescendantAdded:Connect(softenIfJar))
+		end
+		table.insert(watchConns, RunService.Stepped:Connect(onStepGuard))
+		table.insert(watchConns, LocalPlayer.CharacterAdded:Connect(watchChar))
+		watchChar(LocalPlayer.Character)
+	end
+
+	impl.setAnti = function(bool)
+		if not isCurrent() then return end
+		antiFling = bool
+		refreshWatch()
+	end
+
+	impl.setDebug = function(bool)
+		if not isCurrent() then return end
+		debugMode = bool
+		refreshWatch()
 	end
 
 	impl.savePos = function()
@@ -387,4 +536,6 @@ else
 	if impl.desired then safeCall(impl.apply, true) end
 	if impl.desiredMove then safeCall(impl.setMove, true) end
 	if impl.desiredAuto then safeCall(impl.setAuto, true) end
+	if impl.desiredAnti then safeCall(impl.setAnti, true) end
+	if impl.desiredDebug then safeCall(impl.setDebug, true) end
 end
