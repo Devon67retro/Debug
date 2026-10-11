@@ -354,10 +354,43 @@ local function init()
 		table.clear(softConns)
 	end
 
+	-- Cancels any shove on your character for a short time.
+	-- Standing still = no sliding. Walking = speed capped to normal walk speed.
+	-- Upward kicks are removed (real jumps are left alone).
+	local function calmCharacter(char, seconds)
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if not hum or not root then return end
+		task.spawn(function()
+			local t0 = os.clock()
+			while os.clock() - t0 < seconds and char.Parent and hum.Health > 0 do
+				local v = root.AssemblyLinearVelocity
+				local h = Vector3.new(v.X, 0, v.Z)
+				if hum.MoveDirection.Magnitude < 0.1 then
+					h = Vector3.zero
+				else
+					local maxH = hum.WalkSpeed + 2
+					if h.Magnitude > maxH then h = h.Unit * maxH end
+				end
+				local y = v.Y
+				if y > 3 and hum:GetState() ~= Enum.HumanoidStateType.Jumping then y = 0 end
+				root.AssemblyLinearVelocity = Vector3.new(h.X, y, h.Z)
+				root.AssemblyAngularVelocity = Vector3.zero
+				RunService.Heartbeat:Wait()
+			end
+		end)
+	end
+
 	local function watchCharacter(char)
 		if not char then return end
 		for _, d in ipairs(char:GetDescendants()) do softenPart(d) end
 		table.insert(softConns, char.DescendantAdded:Connect(softenPart))
+		-- the moment the jar is equipped, calm any push for a moment
+		table.insert(softConns, char.ChildAdded:Connect(function(child)
+			if child:IsA("Tool") and child.Name == ITEM_NAME then
+				calmCharacter(char, 1.5)
+			end
+		end))
 	end
 
 	-- Waits until the character has fully spawned and is standing on the ground.
@@ -387,25 +420,9 @@ local function init()
 		if held or stored then return end
 
 		local hum = char:FindFirstChildOfClass("Humanoid")
-		local root = char:FindFirstChild("HumanoidRootPart")
 
 		-- cancel any push/kick on your character while the jar is being given
-		if hum and root then
-			task.spawn(function()
-				local t0 = os.clock()
-				while os.clock() - t0 < 1.5 and char.Parent and hum.Health > 0 do
-					local v = root.AssemblyLinearVelocity
-					local h = Vector3.new(v.X, 0, v.Z)
-					local maxH = hum.WalkSpeed + 2
-					if h.Magnitude > maxH then h = h.Unit * maxH end
-					local y = v.Y
-					if y > 3 then y = 0 end
-					root.AssemblyLinearVelocity = Vector3.new(h.X, y, h.Z)
-					root.AssemblyAngularVelocity = Vector3.zero
-					RunService.Heartbeat:Wait()
-				end
-			end)
-		end
+		calmCharacter(char, 1.5)
 
 		pcall(function()
 			ReplicatedStorage.Remotes.Extras.ReplicateToy:InvokeServer(ITEM_NAME)
