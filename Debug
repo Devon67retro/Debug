@@ -24,6 +24,7 @@ local impl = {
 	ready = false,
 	desired = false,        -- Enable Firefly Timer
 	desiredMove = false,    -- Move Cooldown Window
+	desiredAuto = false,    -- Auto Equip Fireflies
 }
 
 local function safeCall(fn, ...)
@@ -43,6 +44,13 @@ pcall(function()
 	my_own_section:AddToggle("Move Cooldown Window", function(bool)
 		impl.desiredMove = bool and true or false
 		if impl.ready then safeCall(impl.setMove, impl.desiredMove) end
+	end)
+end)
+
+pcall(function()
+	my_own_section:AddToggle("Auto Equip Fireflies", function(bool)
+		impl.desiredAuto = bool and true or false
+		if impl.ready then safeCall(impl.setAuto, impl.desiredAuto) end
 	end)
 end)
 
@@ -310,6 +318,36 @@ local function init()
 		if os.clock() >= cdEnd then hideGui() end
 	end
 
+	-- ===== Auto equip Fireflies from Backpack =====
+	local autoEquip = false
+	local autoToken = 0
+
+	local function equipFireflies()
+		local char = LocalPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not hum or hum.Health <= 0 then return end
+		if char:FindFirstChild("Fireflies") then return end
+		local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+		local tool = bp and bp:FindFirstChild("Fireflies")
+		if tool and tool:IsA("Tool") then
+			hum:EquipTool(tool)
+		end
+	end
+
+	impl.setAuto = function(bool)
+		if not isCurrent() then return end
+		autoEquip = bool
+		autoToken = autoToken + 1
+		local my = autoToken
+		if not bool then return end
+		task.spawn(function()
+			while autoEquip and isCurrent() and my == autoToken do
+				pcall(equipFireflies)
+				task.wait(0.25)
+			end
+		end)
+	end
+
 	impl.savePos = function()
 		if not isCurrent() then return end
 		buildGui()
@@ -343,4 +381,5 @@ else
 	impl.ready = true
 	if impl.desired then safeCall(impl.apply, true) end
 	if impl.desiredMove then safeCall(impl.setMove, true) end
+	if impl.desiredAuto then safeCall(impl.setAuto, true) end
 end
