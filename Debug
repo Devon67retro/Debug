@@ -18,6 +18,8 @@ if not okSec or not section then return end
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 
 -- The camera snaps in front of your character, looking straight back at it (level).
@@ -150,7 +152,15 @@ local function snapCamera()
 end
 
 -- ===== On-screen draggable button =====
-local buttonGui, dragConn
+local POS_FILE = "SnapCamera_ButtonPos.json"
+local ACCENT_A = Color3.fromRGB(0, 170, 255)
+local ACCENT_B = Color3.fromRGB(150, 70, 255)
+
+local buttonGui, snapButton, dragConn, glowConn
+
+local function notify(msg)
+	pcall(function() shared.Notify(msg, 3) end)
+end
 
 local function getGuiParent()
 	local ok, ui = pcall(function() return gethui and gethui() end)
@@ -158,15 +168,57 @@ local function getGuiParent()
 	return LocalPlayer:WaitForChild("PlayerGui")
 end
 
+-- saved position is stored as screen fractions (0-1)
+local function loadSavedPos()
+	local ok, result = pcall(function()
+		if isfile and readfile and isfile(POS_FILE) then
+			return HttpService:JSONDecode(readfile(POS_FILE))
+		end
+	end)
+	if ok and type(result) == "table" and type(result.x) == "number" and type(result.y) == "number" then
+		return UDim2.fromScale(math.clamp(result.x, 0.03, 0.97), math.clamp(result.y, 0.03, 0.97))
+	end
+	return nil
+end
+
+local function savePosition()
+	if not (buttonGui and snapButton) then
+		notify("Turn on Show Snap Button first")
+		return
+	end
+	local size = buttonGui.AbsoluteSize
+	if size.X <= 0 or size.Y <= 0 then return end
+	local p = snapButton.Position
+	local x = math.clamp(p.X.Scale + p.X.Offset / size.X, 0.03, 0.97)
+	local y = math.clamp(p.Y.Scale + p.Y.Offset / size.Y, 0.03, 0.97)
+	local wrote = false
+	pcall(function()
+		if writefile then
+			writefile(POS_FILE, HttpService:JSONEncode({ x = x, y = y }))
+			wrote = true
+		end
+	end)
+	if wrote then
+		notify("Button position saved")
+	else
+		notify("Executor can't save files")
+	end
+end
+
 local function destroyButton()
 	if dragConn then
 		pcall(function() dragConn:Disconnect() end)
 		dragConn = nil
 	end
+	if glowConn then
+		pcall(function() glowConn:Disconnect() end)
+		glowConn = nil
+	end
 	if buttonGui then
 		pcall(function() buttonGui:Destroy() end)
 		buttonGui = nil
 	end
+	snapButton = nil
 end
 
 local function createButton()
@@ -186,26 +238,88 @@ local function createButton()
 
 	local b = Instance.new("TextButton")
 	b.Name = "SnapButton"
-	b.Size = UDim2.fromOffset(70, 70)
+	b.Size = UDim2.fromOffset(72, 72)
 	b.AnchorPoint = Vector2.new(0.5, 0.5)
-	b.Position = UDim2.fromScale(0.85, 0.6)
-	b.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-	b.BackgroundTransparency = 0.35
-	b.Text = "SNAP\nCAM"
-	b.TextColor3 = Color3.fromRGB(255, 255, 255)
-	b.Font = Enum.Font.GothamBold
-	b.TextSize = 14
+	b.Position = loadSavedPos() or UDim2.fromScale(0.85, 0.6)
+	b.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	b.BackgroundTransparency = 0.1
+	b.Text = ""
 	b.AutoButtonColor = false
 	b.Parent = buttonGui
+	snapButton = b
 
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(1, 0)
 	corner.Parent = b
 
+	-- dark glass body
+	local body = Instance.new("UIGradient")
+	body.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(34, 38, 66)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 11, 20)),
+	})
+	body.Rotation = 90
+	body.Parent = b
+
+	-- glowing ring that slowly rotates
 	local stroke = Instance.new("UIStroke")
+	stroke.Thickness = 2.5
 	stroke.Color = Color3.fromRGB(255, 255, 255)
-	stroke.Thickness = 1.5
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	stroke.Parent = b
+
+	local ring = Instance.new("UIGradient")
+	ring.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, ACCENT_A),
+		ColorSequenceKeypoint.new(0.5, ACCENT_B),
+		ColorSequenceKeypoint.new(1, ACCENT_A),
+	})
+	ring.Parent = stroke
+
+	glowConn = RunService.RenderStepped:Connect(function()
+		ring.Rotation = (ring.Rotation + 1.5) % 360
+	end)
+
+	-- label
+	local title = Instance.new("TextLabel")
+	title.BackgroundTransparency = 1
+	title.Size = UDim2.fromScale(1, 0.38)
+	title.Position = UDim2.fromScale(0, 0.2)
+	title.Text = "SNAP"
+	title.Font = Enum.Font.GothamBlack
+	title.TextSize = 17
+	title.TextColor3 = Color3.fromRGB(255, 255, 255)
+	title.Active = false
+	title.Parent = b
+
+	local sub = Instance.new("TextLabel")
+	sub.BackgroundTransparency = 1
+	sub.Size = UDim2.fromScale(1, 0.26)
+	sub.Position = UDim2.fromScale(0, 0.52)
+	sub.Text = "CAM"
+	sub.Font = Enum.Font.GothamBold
+	sub.TextSize = 11
+	sub.TextColor3 = Color3.fromRGB(140, 175, 255)
+	sub.Active = false
+	sub.Parent = b
+
+	-- press feedback
+	local scale = Instance.new("UIScale")
+	scale.Parent = b
+	local pressInfo = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local flashInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+	local function press()
+		TweenService:Create(scale, pressInfo, { Scale = 1.12 }):Play()
+	end
+
+	local function release(didSnap)
+		TweenService:Create(scale, pressInfo, { Scale = 1 }):Play()
+		if didSnap then
+			stroke.Thickness = 6
+			TweenService:Create(stroke, flashInfo, { Thickness = 2.5 }):Play()
+		end
+	end
 
 	-- tap = snap, drag = move the button
 	local dragging, dragInput, dragStart, startPos = false, nil, nil, nil
@@ -217,9 +331,11 @@ local function createButton()
 			moved = false
 			dragStart = input.Position
 			startPos = b.Position
+			press()
 			input.Changed:Connect(function()
 				if input.UserInputState == Enum.UserInputState.End then
 					dragging = false
+					release(not moved)
 					if not moved then snapCamera() end
 				end
 			end)
@@ -253,6 +369,10 @@ pcall(function()
 			destroyButton()
 		end
 	end)
+end)
+
+pcall(function()
+	section:AddButton("Save Button Position", savePosition)
 end)
 
 pcall(function()
