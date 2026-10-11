@@ -24,7 +24,7 @@ local impl = {
 	ready = false,
 	desired = false,        -- Enable Firefly Timer
 	desiredMove = false,    -- Move Cooldown Window
-	desiredAuto = false,    -- Auto Equip Fireflies
+	desiredAuto = false,    -- Auto Get Fireflies
 }
 
 local function safeCall(fn, ...)
@@ -48,7 +48,7 @@ pcall(function()
 end)
 
 pcall(function()
-	my_own_section:AddToggle("Auto Equip Fireflies", function(bool)
+	my_own_section:AddToggle("Auto Get Fireflies", function(bool)
 		impl.desiredAuto = bool and true or false
 		if impl.ready then safeCall(impl.setAuto, impl.desiredAuto) end
 	end)
@@ -69,6 +69,7 @@ local function init()
 	local RunService = game:GetService("RunService")
 	local UserInputService = game:GetService("UserInputService")
 	local HttpService = game:GetService("HttpService")
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
 	local LocalPlayer = Players.LocalPlayer
 	local pg = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -318,19 +319,46 @@ local function init()
 		if os.clock() >= cdEnd then hideGui() end
 	end
 
-	-- ===== Auto equip Fireflies from Backpack =====
+	-- ===== Auto get + equip Fireflies (same method as the Bomb Jump+ script) =====
+	-- 1) already held? done  2) in Backpack? equip it
+	-- 3) otherwise ask the server for it through the ReplicateToy remote, wait for it to show up, equip it
+	local ITEM_NAME = "Fireflies"
 	local autoEquip = false
 	local autoToken = 0
+	local lastRequest = 0
 
-	local function equipFireflies()
+	local function findItem()
+		local char = LocalPlayer.Character
+		local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+		local held = char and char:FindFirstChild(ITEM_NAME)
+		local stored = bp and bp:FindFirstChild(ITEM_NAME)
+		return held, stored
+	end
+
+	local function getAndEquipFireflies()
 		local char = LocalPlayer.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		if not hum or hum.Health <= 0 then return end
-		if char:FindFirstChild("Fireflies") then return end
-		local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
-		local tool = bp and bp:FindFirstChild("Fireflies")
-		if tool and tool:IsA("Tool") then
-			hum:EquipTool(tool)
+
+		local held, stored = findItem()
+		if held then return end
+
+		if not stored then
+			-- throttle so the remote isn't spammed
+			if os.clock() - lastRequest < 3 then return end
+			lastRequest = os.clock()
+			pcall(function()
+				ReplicatedStorage.Remotes.Extras.ReplicateToy:InvokeServer(ITEM_NAME)
+			end)
+			for _ = 1, 5 do
+				held, stored = findItem()
+				if held or stored then break end
+				task.wait(0.05)
+			end
+		end
+
+		if stored and stored.Parent then
+			hum:EquipTool(stored)
 		end
 	end
 
@@ -342,7 +370,7 @@ local function init()
 		if not bool then return end
 		task.spawn(function()
 			while autoEquip and isCurrent() and my == autoToken do
-				pcall(equipFireflies)
+				pcall(getAndEquipFireflies)
 				task.wait(0.25)
 			end
 		end)
